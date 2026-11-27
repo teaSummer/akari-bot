@@ -212,6 +212,36 @@ async def _command_authorize(ctx: "Bot.ParserHookContext"):
     return None
 
 
+@policies.hook(point=HookPoint.COMMAND_BEFORE_EXECUTE, priority=40, name="module_rate_limit", server_scope=True, timeout=0)
+async def _module_rate_limit(ctx: "Bot.ParserHookContext"):
+    command = ctx.data.get("command")
+    if command is None:
+        return None
+    msg = ctx.msg
+    module_name = ctx.module_name or ctx.command_first_word
+    if not module_name or msg.check_super_user():
+        return None
+    if msg.session_info.target_union_info.is_module_blocked(
+        module_name, msg.session_info.sender_union_id or msg.session_info.sender_id
+    ):
+        return ctx.Stop(message=I18NContext("core.message.setup.module-block.denied", module=module_name))
+    allowed, remaining, limit, window, _scope = await msg.session_info.target_union_info.consume_module_rate_limit(
+        module_name,
+        msg.session_info.sender_union_id or msg.session_info.sender_id,
+    )
+    if not allowed:
+        return ctx.Stop(
+            message=I18NContext(
+                "core.message.setup.module-limit.exceeded",
+                module=module_name,
+                limit=limit,
+                window=window,
+                time=max(1, int(remaining + 0.999)),
+            )
+        )
+    return None
+
+
 @policies.hook(point=HookPoint.COMMAND_BEFORE_EXECUTE, priority=100, name="locked_prompt", server_scope=True)
 async def _locked_prompt(ctx: "Bot.ParserHookContext"):
     if ctx.data.get("locked"):
@@ -234,6 +264,19 @@ async def _regex_route(ctx: "Bot.ParserHookContext"):
     if msg.session_info.use_running_mention and msg.session_info.bot_name:
         if msg.session_info.bot_name.lower() in trigger_msg.lower() and await ExecutionLockList.is_locked(msg):
             return ctx.Stop(message=I18NContext("parser.command.running.prompt2"))
+    return None
+
+
+@policies.hook(point=HookPoint.REGEX_PREPARE, priority=20, name="module_block", server_scope=True)
+async def _regex_module_block(ctx: "Bot.ParserHookContext"):
+    rfunc = ctx.data.get("regex")
+    module_name = ctx.module_name or ""
+    if rfunc is None or not module_name or ctx.msg.check_super_user():
+        return None
+    if ctx.msg.session_info.target_union_info.is_module_blocked(
+        module_name, ctx.msg.session_info.sender_union_id or ctx.msg.session_info.sender_id
+    ):
+        return ctx.Stop(message=I18NContext("core.message.setup.module-block.denied", module=module_name))
     return None
 
 
