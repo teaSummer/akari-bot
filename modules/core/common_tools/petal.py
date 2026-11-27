@@ -1,6 +1,6 @@
 from core.alive import Alive
 from core.builtins.bot import Bot
-from core.builtins.message.internal import ActionText, I18NContext
+from core.builtins.message.internal import ActionText, I18NContext, Plain
 from core.component import module
 from core.config.core import CoreConfig
 from core.database.models import SenderUnionInfo
@@ -23,12 +23,12 @@ async def _(msg: Bot.MessageSession):
     if msg.session_info.target_union_info.target_data.get("petal_sign", True):
         amount = await sign_get_petal(msg)
         if amount:
-            await msg.finish(
-                [
-                    I18NContext("core.message.petal.sign.success"),
-                    I18NContext("petal.message.gained.success", amount=amount),
-                ]
-            )
+            elements = [I18NContext("core.message.petal.sign.success")]
+            custom_message = msg.session_info.target_union_info.target_data.get("petal_sign_message")
+            if custom_message:
+                elements.append(Plain(custom_message, allow_parse=False))
+            elements.append(I18NContext("petal.message.gained.success", amount=amount))
+            await msg.finish(elements)
         else:
             await msg.finish(I18NContext("core.message.petal.sign.already"))
     else:

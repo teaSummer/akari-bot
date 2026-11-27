@@ -191,18 +191,18 @@ async def _(msg: Bot.MessageSession):
                     send = [I18NContext("twenty_four.message.correct")]
                     if g_msg := await gained_petal(msg, 1):
                         send.append(g_msg)
-                await answer.finish(send)
+                return await answer.finish(send)
             if check_valid(expr):
                 result = calc(expr)
                 if result is None:
-                    await answer.finish(I18NContext("twenty_four.message.incorrect.invalid"))
-                elif abs(result - 24) < 1e-10 and contains_all_numbers(expr, numbers):
+                    return await answer.finish(I18NContext("twenty_four.message.incorrect.invalid"))
+                if abs(result - 24) < 1e-10 and contains_all_numbers(expr, numbers):
                     send = [I18NContext("twenty_four.message.correct")]
                     if g_msg := await gained_petal(msg, 1):
                         send.append(g_msg)
-                    await answer.finish(send)
-                await answer.finish(I18NContext("twenty_four.message.incorrect"))
-            await answer.finish(I18NContext("twenty_four.message.incorrect.invalid"))
+                    return await answer.finish(send)
+                return await answer.finish(I18NContext("twenty_four.message.incorrect"))
+            return await answer.finish(I18NContext("twenty_four.message.incorrect.invalid"))
 
 
 @tf.command("stop {{I18N:game.help.stop}}")

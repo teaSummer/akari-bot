@@ -1114,6 +1114,50 @@ class TargetUnionInfo(UnionInfo):
                 self.modules = modules
                 return True
 
+    async def set_module_block(
+        self, module_name: str, member_union_id: str | None = None, blocked: bool = True
+    ) -> bool:
+        """设置或解除模块的场景级/成员级禁用。"""
+        async with union_mutation():
+            async with in_transaction("default") as connection:
+                current = await (
+                    TargetUnionInfo.filter(union_id=self.union_id)
+                    .using_db(connection)
+                    .select_for_update()
+                    .first()
+                )
+                if not current:
+                    return False
+                target_data = dict(current.target_data or {})
+                blocks = dict(target_data.get("module_blocks") or {})
+                config = dict(blocks.get(module_name) or {})
+                members = list(config.get("members") or [])
+                if member_union_id:
+                    if blocked and member_union_id not in members:
+                        members.append(member_union_id)
+                    elif not blocked:
+                        members = [value for value in members if value != member_union_id]
+                    config["members"] = list(dict.fromkeys(members))
+                else:
+                    config["group"] = blocked
+                if config.get("group") or config.get("members"):
+                    blocks[module_name] = config
+                else:
+                    blocks.pop(module_name, None)
+                target_data["module_blocks"] = blocks
+                await TargetUnionInfo.filter(union_id=self.union_id).using_db(connection).update(target_data=target_data)
+                self.target_data = target_data
+                return True
+
+    def is_module_blocked(self, module_name: str, member_union_id: str | None = None) -> bool:
+        """检查模块是否被当前场景或当前成员禁用。"""
+        config = (self.target_data.get("module_blocks") or {}).get(module_name)
+        if not isinstance(config, dict):
+            return False
+        if config.get("group"):
+            return True
+        return bool(member_union_id and member_union_id in (config.get("members") or []))
+
     async def switch_mute(self) -> bool:
         """
         切换是否在场景中禁用机器人。
@@ -1156,6 +1200,75 @@ class TargetUnionInfo(UnionInfo):
                 )
                 self.target_data = target_data
                 return True
+
+    async def set_module_rate_limit(self, module_name: str, limit: int, window: int = 60, scope: str = "member") -> bool:
+        """设置独立的成员或全群固定窗口限流。"""
+        limit, window = int(limit), int(window)
+        if limit < 0 or window < 1 or scope not in {"member", "group"}:
+            raise ValueError("invalid module rate limit configuration")
+        async with union_mutation():
+            async with in_transaction("default") as connection:
+                current = await TargetUnionInfo.filter(union_id=self.union_id).using_db(connection).select_for_update().first()
+                if not current:
+                    return False
+                target_data = dict(current.target_data or {})
+                limits = dict(target_data.get("module_rate_limits") or {})
+                config = dict(limits.get(module_name) or {})
+                if "limit" in config or "scope" in config:
+                    config = {"member": {"limit": int(config.get("limit", 0)), "window": int(config.get("window", 60)), "usage": dict(config.get("usage") or {})}}
+                if limit == 0:
+                    config.pop(scope, None)
+                else:
+                    config[scope] = {"limit": limit, "window": window, "usage": {}}
+                if config: limits[module_name] = config
+                else: limits.pop(module_name, None)
+                target_data["module_rate_limits"] = limits
+                await TargetUnionInfo.filter(union_id=self.union_id).using_db(connection).update(target_data=target_data)
+                self.target_data = target_data
+                return True
+
+    async def consume_module_rate_limit(self, module_name: str, sender_union_id: str, now: float | None = None) -> tuple[bool, float, int, int, str]:
+        """原子检查并消耗独立的成员/全群限额；成员限额优先。"""
+        import time
+        now = time.time() if now is None else float(now)
+        async with union_mutation():
+            async with in_transaction("default") as connection:
+                current = await TargetUnionInfo.filter(union_id=self.union_id).using_db(connection).select_for_update().first()
+                if not current: return True, 0, 0, 0, "member"
+                target_data = dict(current.target_data or {})
+                limits = dict(target_data.get("module_rate_limits") or {})
+                config = limits.get(module_name)
+                if not isinstance(config, dict): return True, 0, 0, 0, "member"
+                if "limit" in config or "scope" in config:
+                    config = {"member": {"limit": int(config.get("limit", 0)), "window": int(config.get("window", 60)), "usage": dict(config.get("usage") or {})}}
+                def check(scope):
+                    value = config.get(scope)
+                    if not isinstance(value, dict): return 0, 0, {}, 0, 0, 0
+                    try: limit, window = int(value.get("limit", 0)), int(value.get("window", 60))
+                    except (TypeError, ValueError): return 0, 0, {}, 0, 0, 0
+                    if limit <= 0 or window <= 0: return 0, 0, {}, 0, 0, 0
+                    window_start = int(now // window) * window
+                    usage = dict(value.get("usage") or {})
+                    key = sender_union_id if scope == "member" else "__group__"
+                    record = usage.get(key)
+                    count = max(0, int(record.get("count", 0))) if isinstance(record, dict) and int(record.get("window_start", -1)) == window_start else 0
+                    return limit, window, usage, window_start, count, max(0.0, window_start + window - now)
+                ml, mw, mu, mws, mc, mr = check("member")
+                gl, gw, gu, gws, gc, gr = check("group")
+                if ml and mc >= ml: return False, mr, ml, mw, "member"
+                if gl and gc >= gl: return False, gr, gl, gw, "group"
+                if ml:
+                    mu[sender_union_id] = {"window_start": mws, "count": mc + 1}
+                    config["member"] = {"limit": ml, "window": mw, "usage": {k: v for k, v in mu.items() if isinstance(v, dict) and int(v.get("window_start", -1)) == mws}}
+                if gl:
+                    gu["__group__"] = {"window_start": gws, "count": gc + 1}
+                    config["group"] = {"limit": gl, "window": gw, "usage": {"__group__": gu["__group__"]}}
+                limits[module_name] = config
+                target_data["module_rate_limits"] = limits
+                await TargetUnionInfo.filter(union_id=self.union_id).using_db(connection).update(target_data=target_data)
+                self.target_data = target_data
+                if ml: return True, mr, ml, mw, "member"
+                return True, gr, gl, gw, "group"
 
     async def config_custom_admin(self, sender_union_id: str, enable: bool = True) -> bool:
         """

@@ -4,5 +4,11 @@
     "mcv_rss.help.mcv-rss.desc": "开启后 Minecraft 启动器更新 Java 版时会自动推送消息。",
     "mcv_rss.message.mcbv-rss": "Google Play 商店已更新基岩版 ${version} 正式版。",
     "mcv_rss.message.mcv-rss.release": "启动器已更新 ${version} 正式版。\n更新时间： ${record_time}\n推送时间：${posted_time}",
-    "mcv_rss.message.mcv-rss.snapshot": "启动器已更新 ${version} 快照。\n更新时间： ${record_time}\n推送时间：${posted_time}"
+    "mcv_rss.message.mcv-rss.snapshot": "启动器已更新 ${version} 快照。\n更新时间： ${record_time}\n推送时间：${posted_time}",
+    "mcv_rss.help.dev": "设置 Minecraft Java/基岩版开发版本更新推送（dev <je|be> <on|off|status>）。",
+    "mcv_rss.message.dev.invalid-edition": "版本类型只能是 JE 或 BE。",
+    "mcv_rss.message.dev.invalid-action": "操作只能是 on、off 或 status。",
+    "mcv_rss.message.dev.status": "Minecraft ${edition} 开发版本更新推送当前${enabled}。",
+    "mcv_rss.message.dev.updated": "已将 Minecraft ${edition} 开发版本更新推送设置为${enabled}。",
+    "mcv_rss.message.mcbv-rss.preview": "Minecraft 基岩版预览/测试版已更新至 ${version}。"
 }

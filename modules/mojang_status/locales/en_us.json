@@ -7,7 +7,7 @@
 
     "mojang_status.service.account": "Player Info",
     "mojang_status.service.session": "Session Server",
-    "mojang_status.service.services": "Mojang Services",
+    "mojang_status.service.services": "Mojang API",
 
     "mojang_status.status.unknown": "Unknown",
     "mojang_status.status.online": "Online",

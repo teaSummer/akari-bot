@@ -25,6 +25,39 @@ RELEASE_PATTERN = re.compile(r"^\d{1,2}\.\d+(\.\d+)?$")
 
 CHANGELOG_URL_PREFIX = "https://www.minecraft.net/en-us/article/minecraft"
 
+BETA_PREVIEW_SECTION_URL = "https://feedback.minecraft.net/hc/en-us/sections/360001185332-Beta-and-Preview-Information-and-Changelogs"
+DEV_UPDATE_TARGET_KEYS = {"je": "mcv_rss_dev", "be": "mcbv_rss_dev"}
+DEV_UPDATE_DEFAULTS = {"je": True, "be": False}
+
+
+def dev_updates_enabled(session, edition: str) -> bool:
+    target_union_info = getattr(session, "target_union_info", None)
+    if target_union_info is None:
+        session_info = getattr(session, "session_info", None)
+        target_union_info = getattr(session_info, "target_union_info", None)
+    target_data = getattr(target_union_info, "target_data", {}) if target_union_info else {}
+    return bool(target_data.get(DEV_UPDATE_TARGET_KEYS[edition], DEV_UPDATE_DEFAULTS[edition]))
+
+
+def filter_dev_sessions(session_list, edition: str):
+    return [session for session in session_list if dev_updates_enabled(session, edition)]
+
+
+async def post_dev_update(module_name: str, message: MessageChain, edition: str):
+    sessions = await Bot.get_enabled_this_module(module_name)
+    await Bot.post_message(module_name, message=message, session_list=filter_dev_sessions(sessions, edition))
+
+
+async def get_bedrock_preview_version() -> str:
+    html = await get_url(BETA_PREVIEW_SECTION_URL, attempt=1, logging_err_resp=False)
+    soup = BeautifulSoup(html, "html.parser")
+    for article in soup.find_all("a"):
+        title = article.get_text(" ", strip=True)
+        match = re.match(r"^Minecraft Beta & Preview - (?P<version>[\d./]+)$", title)
+        if match:
+            return match.group("version")
+    return ""
+
 
 def get_changelog_url(version: str) -> str | None:
     """Generate changelog url of the given minecraft version id"""
@@ -71,6 +104,27 @@ mcv_rss = module(
     doc=True,
     rss=True,
 )
+
+
+@mcv_rss.command(
+    "dev <edition> <action> {{I18N:mcv_rss.help.dev}}",
+    required_admin=True,
+    available_without_enable=True,
+)
+async def _(msg: Bot.MessageSession, edition: str, action: str):
+    edition = edition.lower()
+    action = action.lower()
+    if edition not in DEV_UPDATE_TARGET_KEYS:
+        await msg.finish(I18NContext("mcv_rss.message.dev.invalid-edition"))
+    if action not in {"on", "off", "status"}:
+        await msg.finish(I18NContext("mcv_rss.message.dev.invalid-action"))
+    enabled = dev_updates_enabled(msg, edition)
+    if action == "status":
+        await msg.finish(I18NContext("mcv_rss.message.dev.status", edition=edition.upper(), enabled="开启" if enabled else "关闭"))
+    new_value = action == "on"
+    await msg.session_info.target_union_info.edit_target_data(DEV_UPDATE_TARGET_KEYS[edition], new_value)
+    await msg.finish(I18NContext("mcv_rss.message.dev.updated", edition=edition.upper(), enabled="开启" if new_value else "关闭"))
+
 
 mcbv_rss = module(
     "mcbv-rss",
@@ -158,9 +212,9 @@ async def _():
         if snapshot not in verlist:
             Logger.info(f"Huh, we found {snapshot}.")
             if not startup_mute[0]:
-                await Bot.post_message(
+                await post_dev_update(
                     "mcv-rss",
-                    message=MessageChain.assign(
+                    MessageChain.assign(
                         [
                             I18NContext(
                                 "mcv_rss.message.mcv-rss.snapshot",
@@ -170,6 +224,7 @@ async def _():
                             ),
                         ]
                     ),
+                    "je",
                 )
             verlist.append(snapshot)
             await update_stored_list(Bot.Info.client_name, "mcv_rss", verlist)
@@ -178,9 +233,9 @@ async def _():
                 get_stored_news_title = await get_stored_list(Bot.Info.client_name, "mcnews")
                 if article[1] not in get_stored_news_title:
                     if not startup_mute[0]:
-                        await Bot.post_message(
+                        await post_dev_update(
                             "minecraft-news",
-                            message=MessageChain.assign(
+                            MessageChain.assign(
                                 [
                                     I18NContext(
                                         "minecraft_news.message.update_log",
@@ -189,6 +244,7 @@ async def _():
                                     )
                                 ]
                             ),
+                            "je",
                         )
                     get_stored_news_title.append(article[1])
                     await update_stored_list(Bot.Info.client_name, "mcnews", get_stored_news_title)
@@ -206,6 +262,18 @@ async def _():
     try:
         verlist = await get_stored_list(Bot.Info.client_name, "mcbv_rss")
         version = google_play_scraper("com.mojang.minecraftpe")["version"]
+        preview_version = await get_bedrock_preview_version()
+        if preview_version and preview_version not in verlist:
+            Logger.info(f"Huh, we found Bedrock Preview {preview_version}.")
+            if not startup_mute[1]:
+                await post_dev_update(
+                    "mcbv-rss",
+                    MessageChain.assign([I18NContext("mcv_rss.message.mcbv-rss.preview", version=preview_version)]),
+                    "be",
+                )
+            verlist.append(preview_version)
+            await update_stored_list(Bot.Info.client_name, "mcbv_rss", verlist)
+
         if version not in verlist:
             Logger.info(f"Huh, we found Bedrock {version}.")
             if not startup_mute[1]:
