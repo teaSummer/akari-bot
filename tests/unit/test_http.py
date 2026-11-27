@@ -186,6 +186,21 @@ async def _test_request_url_private_ip_opt_outs():
         return False
 
 
+async def _test_download_rejects_path_traversal_filename():
+    try:
+        import core.utils.http as http_module
+
+        for filename in ("../escape.txt", "..\\escape.txt", "/tmp/escape.txt", ".."):
+            try:
+                http_module._validate_download_filename(filename)
+                return False
+            except ValueError:
+                pass
+
+        return http_module._validate_download_filename("safe.txt") == "safe.txt"
+    except Exception:
+        return False
+
 @func_case
 async def test_http(tester: Tester):
     """core.utils.http: HTTP 工具纯函数测试"""
@@ -197,4 +212,5 @@ async def test_http(tester: Tester):
     await tester.test(_test_private_ip_check_blocks_empty_dns_results, "private_ip_check 拒绝空 DNS 结果测试")
     await tester.test(_test_request_url_checks_redirect_before_sending, "request_url 重定向逐跳检查测试")
     await tester.test(_test_request_url_private_ip_opt_outs, "request_url 私网放行开关测试")
+    await tester.test(_test_download_rejects_path_traversal_filename, "download 拒绝路径穿越文件名测试")
     return tester
