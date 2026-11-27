@@ -152,7 +152,7 @@ async def request_url(
                 ck.load(cookies)
                 cookies_dict = {key: morsel.value for key, morsel in ck.items()}
                 client.cookies.update(cookies_dict)
-                Logger.debug(f"Using cookies: {cookies_dict}")
+                Logger.debug(f"Using {len(cookies_dict)} request cookie(s).")
             try:
                 resp = await client.request(
                     method=method,
@@ -407,6 +407,13 @@ async def delete_url(
     )
 
 
+def _validate_download_filename(filename: str) -> str:
+    """Reject path components so a caller cannot escape the requested download directory."""
+    value = str(filename)
+    if not value or value in {".", ".."} or "/" in value or "\\" in value or Path(value).name != value:
+        raise ValueError("Invalid download filename")
+    return value
+
 async def download(
     url: str,
     filename: str | None = None,
@@ -452,7 +459,9 @@ async def download(
     )
 
     if data:
-        if not filename:
+        if filename:
+            filename = _validate_download_filename(filename)
+        else:
             try:
                 ftt = ft.match(data).extension
             except AttributeError:
