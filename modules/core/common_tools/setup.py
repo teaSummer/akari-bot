@@ -7,6 +7,7 @@ from core.builtins.utils import command_prefix
 from core.component import module
 from core.config.core import CoreConfig
 from core.i18n import Locale
+from core.loader import ModulesManager
 from core.utils.button import arrange_buttons
 from core.utils.timezone import format_offset, parse_offset
 
@@ -35,6 +36,28 @@ async def _(msg: Bot.MessageSession):
         await msg.finish(I18NContext("core.message.setup.sign.disable"))
 
 
+@setup.command("sign-message reset {{I18N:core.help.setup.sign-message.reset}}", required_admin=True, load=CoreConfig.enable_petal, priority=2)
+@setup.command("sign-message <message> {{I18N:core.help.setup.sign-message}}", required_admin=True, load=CoreConfig.enable_petal)
+@setup.command("sign-message {{I18N:core.help.setup.sign-message.show}}", required_admin=True, load=CoreConfig.enable_petal)
+async def _(msg: Bot.MessageSession):
+    target_data = msg.session_info.target_union_info.target_data
+    if msg.parsed_msg.get("reset", False):
+        await msg.session_info.target_union_info.edit_target_data("petal_sign_message")
+        await msg.finish(I18NContext("core.message.setup.sign-message.reset.success"))
+
+    if "<message>" in msg.parsed_msg and msg.parsed_msg["<message>"] is not False:
+        message = msg.parsed_msg["<message>"].strip()
+        if not message:
+            await msg.finish(I18NContext("core.message.setup.sign-message.invalid"))
+        await msg.session_info.target_union_info.edit_target_data("petal_sign_message", message)
+        await msg.finish(I18NContext("core.message.setup.sign-message.success", message=message))
+
+    message = target_data.get("petal_sign_message")
+    if message:
+        await msg.finish(I18NContext("core.message.setup.sign-message.show", message=message))
+    await msg.finish(I18NContext("core.message.setup.sign-message.show.none"))
+
+
 @setup.command("emote {{I18N:core.help.setup.emote}}", required_admin=True, load=CoreConfig.use_emote)
 async def _(msg: Bot.MessageSession):
     enabled = msg.session_info.emote_enabled
@@ -49,6 +72,52 @@ async def _(msg: Bot.MessageSession, second: int):
     second = 0 if second < 0 else second
     await msg.session_info.target_union_info.edit_target_data("cooldown_time", second)
     await msg.finish(I18NContext("core.message.setup.cooldown.success", time=second))
+
+
+
+
+@setup.command(
+    [
+        "module-block reset <module> [<member>] {{I18N:core.help.setup.module-block.reset}}",
+        "module-block <module> [<member>] {{I18N:core.help.setup.module-block}}",
+        "module-block {{I18N:core.help.setup.module-block.list}}",
+    ],
+    required_admin=True,
+)
+async def _(msg: Bot.MessageSession):
+    modules = ModulesManager.return_modules_list(
+        target_from=msg.session_info.target_from,
+        client_name=msg.session_info.client_name,
+    )
+    module_arg = msg.parsed_msg.get("<module>")
+    member = str(msg.parsed_msg.get("<member>") or "").strip() or None
+    reset = bool(msg.parsed_msg.get("reset", False))
+    if not module_arg:
+        configured = msg.session_info.target_union_info.target_data.get("module_blocks") or {}
+        lines = []
+        for name, config in sorted(configured.items()):
+            if not isinstance(config, dict):
+                continue
+            if config.get("group"):
+                lines.append(I18NContext("core.message.setup.module-block.list.item.group", module=name))
+            for member_id in config.get("members") or []:
+                lines.append(I18NContext("core.message.setup.module-block.list.item.member", module=name, member=member_id))
+        if not lines:
+            await msg.finish(I18NContext("core.message.setup.module-block.list.none"))
+        await msg.finish(I18NContext("core.message.setup.module-block.list", blocks=msg.session_info.locale.t("message.delimiter").join(str(line) for line in lines)))
+
+    module_name = str(module_arg).split()[0]
+    resolved = ModulesManager.get_module_and_alias_first_words(module_name) or [module_name]
+    canonical = next((name for name in resolved if name in modules), None)
+    if canonical is None:
+        await msg.finish(I18NContext("core.message.module.enable.not_found", module=module_name))
+    module = modules[canonical]
+    if module.base or module.hidden or module.required_superuser:
+        await msg.finish(I18NContext("core.message.setup.module-block.invalid"))
+    await msg.session_info.target_union_info.set_module_block(canonical, member, not reset)
+    if reset:
+        await msg.finish(I18NContext("core.message.setup.module-block.reset.success", module=canonical, member=member or "group"))
+    await msg.finish(I18NContext("core.message.setup.module-block.success", module=canonical, member=member or "group"))
 
 
 @setup.command("invalid-module-prompt {{I18N:core.help.setup.invalid-module-prompt}}", required_admin=True)
@@ -202,6 +271,19 @@ def build_target_rows(msg: Bot.MessageSession) -> list[SettingRow]:
                 "setup sign",
             )
         )
+        sign_message = target_data.get("petal_sign_message")
+        rows.append(
+            SettingRow(
+                label=locale.t("core.message.setup.list.item.sign-message"),
+                value=(
+                    locale.t("core.message.setup.list.value.sign-message", message=sign_message)
+                    if sign_message
+                    else locale.t("message.none")
+                ),
+                action=locale.t("core.message.setup.list.action.modify"),
+                command="setup sign-message ",
+            )
+        )
 
     if CoreConfig.use_emote:
         rows.append(
@@ -225,6 +307,30 @@ def build_target_rows(msg: Bot.MessageSession) -> list[SettingRow]:
             value=locale.t("core.message.setup.list.value.cooldown", time=cooldown),
             action=locale.t("core.message.setup.list.action.modify"),
             command=f"setup cooldown {cooldown}",
+        ),
+        SettingRow(
+            label=locale.t("core.message.setup.list.item.module-limit"),
+            value=locale.t(
+                "core.message.setup.list.value.module-limit",
+                count=len(
+                    [
+                        value
+                        for value in (target_data.get("module_rate_limits") or {}).values()
+                        if isinstance(value, dict) and int(value.get("limit", 0)) > 0
+                    ]
+                ),
+            ),
+            action=locale.t("core.message.setup.list.action.modify"),
+            command="setup module-limit",
+        ),
+        SettingRow(
+            label=locale.t("core.message.setup.list.item.module-block"),
+            value=locale.t(
+                "core.message.setup.list.value.module-block",
+                count=len(target_data.get("module_blocks") or {}),
+            ),
+            action=locale.t("core.message.setup.list.action.modify"),
+            command="setup module-block",
         ),
         _toggle_row(
             locale,
